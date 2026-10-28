@@ -43,7 +43,10 @@ Object.assign(ICONS, {
   alert: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
   checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
   video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
-  pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'
+  pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  back: '<polyline points="15 18 9 12 15 6"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'
 });
 const MODE_IC = { Video: 'video', Phone: 'phone', Onsite: 'pin' };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
@@ -87,6 +90,14 @@ const MODES = ['Video', 'Phone', 'Onsite'];
 const FILTERS = [
   ['all', 'All'], ['upcoming', 'Upcoming'], ['awaiting', 'Awaiting'], ['due', 'Follow-up due'], ['closed', 'Closed']
 ];
+
+/* job opportunities + call log */
+const OPP_STATUS = { lead: 'Lead', active: 'In process', hold: 'On hold', offer: 'Offer', closed: 'Closed' };
+const SOURCES = ['Recruiter call', 'Naukri', 'LinkedIn', 'Referral', 'Company site', 'Other'];
+const CALL_DIR = ['Incoming', 'Outgoing'];
+const CALL_OUTCOMES = ['Interested', 'Details shared', 'Call back later', 'Interview scheduled', 'No answer', 'Not interested', 'Other'];
+const OFILTERS = [['all', 'All'], ['active', 'Active'], ['callback', 'Callback due'], ['offer', 'Offer'], ['closed', 'Closed']];
+const POSITIVE_CALL = ['Interested', 'Details shared', 'Interview scheduled'];
 
 const sign = () =>
   `Regards,\n${P.name}\n${P.phone}\n${P.email}\nPortfolio: ${P.portfolio}\nLinkedIn: ${P.linkedin}`;
@@ -154,7 +165,16 @@ const api = {
   async del(t, id) {
     if (!useSB) {
       store.set(t, store.get(t).filter((r) => r.id !== id));
-      if (t === 'companies') store.set('interviews', store.get('interviews').filter((r) => r.company_id !== id));
+      if (t === 'companies') {
+        const oppIds = store.get('opportunities').filter((o) => o.company_id === id).map((o) => o.id);
+        store.set('interviews', store.get('interviews').filter((r) => r.company_id !== id));
+        store.set('opportunities', store.get('opportunities').filter((o) => o.company_id !== id));
+        store.set('calls', store.get('calls').filter((c) => !oppIds.includes(c.opportunity_id)));
+      }
+      if (t === 'opportunities') {   // mirrors the DB: calls are deleted, interviews are kept but unlinked
+        store.set('calls', store.get('calls').filter((c) => c.opportunity_id !== id));
+        store.set('interviews', store.get('interviews').map((i) => (i.opportunity_id === id ? { ...i, opportunity_id: null } : i)));
+      }
       return;
     }
     const { error } = await sb.from(t).delete().eq('id', id);
@@ -165,18 +185,31 @@ const api = {
 /* ============================ state ============================ */
 const S = {
   tab: 'interviews', filter: 'all', q: '',
-  companies: [], interviews: [],
+  companies: [], interviews: [], opportunities: [], calls: [], oppReady: true,
+  oppId: null, ofilter: 'all', oq: '',
   fu: { id: null, tpl: null, subject: '', body: '' },
   share: { phone: true, email: true, portfolio: true, linkedin: true, resume: true, toPhone: '', toMail: '', text: null }
 };
 const companyOf = (i) => S.companies.find((c) => c.id === i.company_id);
 const findI = (id) => S.interviews.find((i) => i.id === id);
 const isDue = (i) => i.followup_on && i.followup_on <= todayStr() && !FINAL.includes(i.status);
+const oppOf = (id) => S.opportunities.find((o) => o.id === id);
+const oppCalls = (id) => S.calls.filter((c) => c.opportunity_id === id).sort((a, b) => (b.call_at || '').localeCompare(a.call_at || ''));
+const oppInts = (id) => S.interviews.filter((i) => i.opportunity_id === id)
+  .sort((a, b) => (a.interview_at || a.created_at || '').localeCompare(b.interview_at || b.created_at || ''));
+const callbackDue = (o) => { const l = oppCalls(o.id)[0]; return !!(l && l.next_action_on && l.next_action_on <= todayStr() && o.status !== 'closed'); };
+const lastActivity = (o) => [o.created_at, ...oppCalls(o.id).map((c) => c.call_at), ...oppInts(o.id).map((i) => i.interview_at)].filter(Boolean).sort().pop() || '';
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 async function loadAll() {
   try {
     [S.companies, S.interviews] = await Promise.all([api.list('companies'), api.list('interviews')]);
   } catch (e) { toast('Could not load data: ' + (e.message || e)); }
+  // opportunities + calls: tolerate a database that has not been migrated yet
+  try {
+    [S.opportunities, S.calls] = await Promise.all([api.list('opportunities'), api.list('calls')]);
+    S.oppReady = true;
+  } catch (e) { S.opportunities = []; S.calls = []; S.oppReady = false; }
 }
 
 /* ============================ UI utilities ============================ */
@@ -202,7 +235,7 @@ function closeSheet() { $('#sheet').innerHTML = ''; document.body.style.overflow
 const opts = (list, sel) => list.map((v) => `<option ${v === sel ? 'selected' : ''}>${esc(v)}</option>`).join('');
 
 /* ============================ views ============================ */
-const NAV = [['interviews', 'list', 'Interviews'], ['followup', 'send', 'Follow-up'], ['companies', 'building', 'Contacts'], ['profile', 'share', 'Share']];
+const NAV = [['interviews', 'list', 'Interviews'], ['opportunities', 'briefcase', 'Jobs'], ['followup', 'send', 'Follow-up'], ['companies', 'building', 'Contacts'], ['profile', 'share', 'Share']];
 
 function renderShell() {
   $('#nav').innerHTML = `<div class="brand"><img src="icons/icon-192.png" alt="">Interview Tracker</div>` +
@@ -212,11 +245,11 @@ function renderShell() {
 
 let enterT;
 function render(keepScroll) {
-  const v = { interviews: vInterviews, followup: vFollowup, companies: vCompanies, profile: vProfile }[S.tab];
+  const v = { interviews: vInterviews, opportunities: vOpportunities, followup: vFollowup, companies: vCompanies, profile: vProfile }[S.tab];
   $('#view').innerHTML = v();
   $$('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
-  $('#fab').hidden = !['interviews', 'companies'].includes(S.tab);
-  $('#fab').setAttribute('aria-label', S.tab === 'companies' ? 'Add company' : 'Add interview');
+  $('#fab').hidden = !(['interviews', 'companies'].includes(S.tab) || (S.tab === 'opportunities' && !S.oppId));
+  $('#fab').setAttribute('aria-label', { companies: 'Add company', opportunities: 'Add job opportunity' }[S.tab] || 'Add interview');
   if (!keepScroll) {
     const vw = $('#view'); vw.classList.remove('enter'); void vw.offsetWidth; vw.classList.add('enter');
     clearTimeout(enterT); enterT = setTimeout(() => vw.classList.remove('enter'), 900);
@@ -283,6 +316,112 @@ function vInterviews() {
     <div class="search">${ic('search')}<input id="q" type="search" placeholder="Search company or role" value="${esc(S.q)}" autocomplete="off"></div>
     <div class="chips scroll">${FILTERS.map(([k, l]) => `<button class="chip ${S.filter === k ? 'on' : ''}" data-act="filter" data-id="${k}">${l}</button>`).join('')}</div>
     <section class="list" id="list">${listHtml()}</section>`;
+}
+
+/* ---------- job opportunities (calls + interview history) ---------- */
+const OPP_ACTIVE = ['lead', 'active', 'hold'];
+function filteredOpps() {
+  const q = S.oq.trim().toLowerCase();
+  return S.opportunities.filter((o) => {
+    if (S.ofilter === 'active' && !OPP_ACTIVE.includes(o.status)) return false;
+    if (S.ofilter === 'callback' && !callbackDue(o)) return false;
+    if (S.ofilter === 'offer' && o.status !== 'offer') return false;
+    if (S.ofilter === 'closed' && o.status !== 'closed') return false;
+    if (q) { const c = companyOf(o) || {}; return `${c.name} ${o.role} ${o.source}`.toLowerCase().includes(q); }
+    return true;
+  }).sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
+}
+
+function oppCard(o, n) {
+  const c = companyOf(o) || {};
+  const calls = oppCalls(o.id), ints = oppInts(o.id), last = calls[0], cb = callbackDue(o);
+  return `<article class="card" style="--i:${Math.min(n || 0, 10)}" data-act="openOpp" data-id="${o.id}">
+    <div class="card-top">
+      <div class="row"><div class="avatar">${esc((c.name || '?').trim()[0]?.toUpperCase())}</div>
+        <div><h3>${esc(c.name || 'Unknown company')}</h3><p class="role">${esc(o.role)}${o.source ? ' · ' + esc(o.source) : ''}</p></div></div>
+      <span class="badge o-${o.status}">${OPP_STATUS[o.status] || esc(o.status)}</span>
+    </div>
+    <div class="meta">
+      <span>${ic('phone', 'sm')}${plural(calls.length, 'call')}</span>
+      <span>${ic('calendar', 'sm')}${plural(ints.length, 'interview')}</span>
+      ${last ? `<span>${ic('clock', 'sm')}Last call ${esc(fmtDT(last.call_at))}</span>` : ''}
+      ${cb ? `<span class="due">${ic('bell', 'sm')}Callback ${esc(fmtD(last.next_action_on))} · due</span>` : ''}
+    </div>
+    <div class="actions">
+      ${c.hr_phone ? `<a class="btn sm" href="${telHref(c.hr_phone)}">${ic('phone', 'sm')}Call</a>` : `<span class="btn sm off">${ic('phone', 'sm')}Call</span>`}
+      <button class="btn sm pri" data-act="newCall" data-id="${o.id}">${ic('plus', 'sm')}Log call</button>
+    </div>
+  </article>`;
+}
+
+function oppListHtml() {
+  const rows = filteredOpps();
+  if (!rows.length) {
+    return S.opportunities.length
+      ? `<div class="empty">${ic('search')}<h3>No matches</h3><p>Try another filter or search term.</p></div>`
+      : `<div class="empty">${ic('briefcase')}<h3>No job opportunities yet</h3><p>Add an opportunity, log recruiter calls against it, then build the interview history round by round.</p><button class="btn pri" data-act="add">${ic('plus')}Add opportunity</button></div>`;
+  }
+  return rows.map(oppCard).join('');
+}
+
+function vOpportunities() {
+  if (S.oppId) return vOppDetail();
+  if (!S.oppReady) {
+    return `<header class="top"><p class="eyebrow">Calls &amp; interview history</p><h1>Job opportunities</h1></header>
+      <div class="panel"><h2>One-time database update needed</h2>
+        <p class="hint" style="margin:0">Open Supabase → SQL Editor, paste the latest <b>supabase_schema.sql</b> and run it. It is safe to re-run and keeps your existing data. Then reload this app.</p></div>`;
+  }
+  const active = S.opportunities.filter((o) => OPP_ACTIVE.includes(o.status)).length;
+  const wk = Date.now() - 7 * 864e5;
+  const weekCalls = S.calls.filter((c) => c.call_at && new Date(c.call_at).getTime() >= wk).length;
+  const cb = S.opportunities.filter(callbackDue).length;
+  const orphan = S.interviews.filter((i) => !i.opportunity_id).length;
+  return `<header class="top"><p class="eyebrow">Calls &amp; interview history</p><h1>Job opportunities</h1></header>
+    <section class="stats">
+      <button class="stat t-indigo" data-act="ofilter" data-id="active"><div class="stat-ic">${ic('briefcase')}</div><b>${active}</b><span>Active</span></button>
+      <div class="stat t-amber"><div class="stat-ic">${ic('phone')}</div><b>${weekCalls}</b><span>Calls · 7 days</span></div>
+      <button class="stat ${cb ? 't-red' : 't-green'}" data-act="ofilter" data-id="callback"><div class="stat-ic">${ic('bell')}</div><b>${cb}</b><span>Callbacks due</span></button>
+    </section>
+    ${orphan ? `<div class="panel link-banner"><div>${ic('link')}<span><b>${plural(orphan, 'interview')}</b> not linked to an opportunity yet.</span></div><button class="btn sm pri" data-act="linkLegacy">Link automatically</button></div>` : ''}
+    <div class="search">${ic('search')}<input id="oq" type="search" placeholder="Search company, role or source" value="${esc(S.oq)}" autocomplete="off"></div>
+    <div class="chips scroll">${OFILTERS.map(([k, l]) => `<button class="chip ${S.ofilter === k ? 'on' : ''}" data-act="ofilter" data-id="${k}">${l}</button>`).join('')}</div>
+    <section class="list" id="olist">${oppListHtml()}</section>`;
+}
+
+function vOppDetail() {
+  const o = oppOf(S.oppId);
+  if (!o) { S.oppId = null; return vOpportunities(); }
+  const c = companyOf(o) || {}, calls = oppCalls(o.id), ints = oppInts(o.id);
+  const callItem = (x) => `<div class="tl-item" data-act="editCall" data-id="${x.id}">
+      <span class="dot ${x.direction === 'Outgoing' ? 'out' : 'in'}"></span>
+      <div class="tl-body">
+        <div class="tl-top"><b>${esc(x.outcome || 'Call')}</b>${x.next_action_on ? `<span class="chip-s ${x.next_action_on <= todayStr() && o.status !== 'closed' ? 'due' : ''}">${ic('bell', 'sm')}${esc(fmtD(x.next_action_on))}</span>` : ''}</div>
+        <small>${esc(x.direction || '')}${x.contact_name ? ' · ' + esc(x.contact_name) : ''}${x.duration_min ? ' · ' + x.duration_min + ' min' : ''} · ${esc(fmtDT(x.call_at))}</small>
+        ${x.notes ? `<p>${esc(x.notes)}</p>` : ''}
+      </div></div>`;
+  const intItem = (x, n) => `<div class="tl-item" data-act="edit" data-id="${x.id}">
+      <span class="dot step">${n + 1}</span>
+      <div class="tl-body">
+        <div class="tl-top"><b>${esc(x.round || 'Interview')}</b><span class="badge s-${x.status}">${STATUS[x.status] || esc(x.status)}</span></div>
+        <small>${x.interview_at ? esc(fmtDT(x.interview_at)) : 'Date not set'}${x.mode ? ' · ' + esc(x.mode) : ''}</small>
+        ${x.notes ? `<p>${esc(x.notes)}</p>` : ''}
+      </div></div>`;
+  return `<button class="back" data-act="oppBack">${ic('back')}Job opportunities</button>
+    <header class="top top-row"><div class="row"><div class="avatar lg">${esc((c.name || '?').trim()[0]?.toUpperCase())}</div>
+      <div><h1 class="h-sm">${esc(c.name || 'Unknown company')}</h1><p class="sub">${esc(o.role)}${o.source ? ' · via ' + esc(o.source) : ''}</p></div></div>
+      <button class="icon-btn" data-act="editOpp" data-id="${o.id}" aria-label="Edit opportunity">${ic('edit')}</button></header>
+    <div class="opp-meta"><span class="badge o-${o.status}">${OPP_STATUS[o.status] || esc(o.status)}</span>
+      ${c.hr_name ? `<span>${ic('user', 'sm')}${esc(c.hr_name)}</span>` : ''}${c.hr_phone ? `<span>${ic('phone', 'sm')}${esc(c.hr_phone)}</span>` : ''}</div>
+    <div class="btn-row opp-actions">
+      ${c.hr_phone ? `<a class="btn" href="${telHref(c.hr_phone)}">${ic('phone', 'sm')}Call HR</a>` : ''}
+      <button class="btn pri" data-act="newCall" data-id="${o.id}">${ic('plus', 'sm')}Log call</button>
+      <button class="btn" data-act="newInt" data-id="${o.id}">${ic('calendar', 'sm')}Interview</button>
+    </div>
+    <div class="panel"><h2>Interview history <span class="count">${ints.length}</span></h2>
+      ${ints.length ? `<div class="tl">${ints.map(intItem).join('')}</div>` : `<p class="hint" style="margin:0">No rounds yet. Tap “Add interview” once a round is scheduled.</p>`}</div>
+    <div class="panel"><h2>Call log <span class="count">${calls.length}</span></h2>
+      ${calls.length ? `<div class="tl">${calls.map(callItem).join('')}</div>` : `<p class="hint" style="margin:0">No calls logged yet. Tap “Log call” after speaking with the recruiter.</p>`}</div>
+    ${o.notes ? `<div class="panel"><h2>Notes</h2><p class="note-text">${esc(o.notes)}</p></div>` : ''}`;
 }
 
 /* ---------- companies ---------- */
@@ -403,19 +542,26 @@ function vProfile() {
 }
 
 /* ============================ forms ============================ */
-function openInterview(id) {
-  const i = id ? findI(id) : null;
-  const d = i || { status: 'scheduled', round: 'Screening', mode: 'Video' };
-  const noCo = !S.companies.length;
-  openSheet(i ? 'Edit interview' : 'Add interview', `
-  <form data-form="interview"><input type="hidden" name="id" value="${i ? i.id : ''}">
+const companySelect = (selected, noCo) => `
     <div class="field"><label>Company</label>
-      <select name="company_id" id="coSel">${S.companies.map((c) => `<option value="${c.id}" ${d.company_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}<option value="__new" ${noCo ? 'selected' : ''}>+ New company…</option></select></div>
+      <select name="company_id" id="coSel">${S.companies.map((c) => `<option value="${c.id}" ${selected === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}<option value="__new" ${noCo ? 'selected' : ''}>+ New company…</option></select></div>
     <div class="inline-new" id="newCo" ${noCo ? '' : 'hidden'}>
       <div class="field"><label>Company name</label><input type="text" name="new_name" placeholder="e.g. Infosys"></div>
       <div class="field"><label>HR name</label><input type="text" name="new_hr_name"></div>
       <div class="grid2"><div class="field" style="margin:0"><label>HR phone</label><input type="tel" name="new_hr_phone" placeholder="+91…"></div>
-        <div class="field" style="margin:0"><label>HR email</label><input type="email" name="new_hr_email"></div></div></div>
+        <div class="field" style="margin:0"><label>HR email</label><input type="email" name="new_hr_email"></div></div></div>`;
+
+function openInterview(id, preset = {}) {
+  const i = id ? findI(id) : null;
+  const d = i || { status: 'scheduled', round: 'Screening', mode: 'Video', ...preset };
+  const noCo = !S.companies.length;
+  const oppField = S.oppReady ? `
+    <div class="field"><label>Job opportunity <span class="opt">(optional)</span></label>
+      <select name="opportunity_id" id="oppSel"><option value="">Not linked</option>${S.opportunities.map((o) => `<option value="${o.id}" ${d.opportunity_id === o.id ? 'selected' : ''}>${esc((companyOf(o) || {}).name || '?')} – ${esc(o.role)}</option>`).join('')}</select></div>` : '';
+  openSheet(i ? 'Edit interview' : 'Add interview', `
+  <form data-form="interview"><input type="hidden" name="id" value="${i ? i.id : ''}">
+    ${oppField}
+    ${companySelect(d.company_id, noCo)}
     <div class="field"><label>Role</label><input type="text" name="role" required value="${esc(d.role || '')}" placeholder="Python Backend Developer"></div>
     <div class="grid2"><div class="field"><label>Round</label><select name="round">${opts(ROUNDS, d.round)}</select></div>
       <div class="field"><label>Mode</label><select name="mode">${opts(MODES, d.mode)}</select></div></div>
@@ -442,24 +588,114 @@ function openCompany(id) {
   </form>`);
 }
 
+function openOpportunity(id) {
+  const o = id ? oppOf(id) : null;
+  const d = o || { status: 'lead', source: 'Recruiter call' };
+  const noCo = !S.companies.length;
+  openSheet(o ? 'Edit opportunity' : 'Add job opportunity', `
+  <form data-form="opportunity"><input type="hidden" name="id" value="${o ? o.id : ''}">
+    ${companySelect(d.company_id, noCo)}
+    <div class="field"><label>Role</label><input type="text" name="role" required value="${esc(d.role || '')}" placeholder="Python Backend Developer"></div>
+    <div class="grid2"><div class="field"><label>Source</label><select name="source">${opts(SOURCES, d.source)}</select></div>
+      <div class="field"><label>Status</label><select name="status">${Object.entries(OPP_STATUS).map(([k, v]) => `<option value="${k}" ${k === d.status ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Notes</label><textarea name="notes" rows="3" style="min-height:80px" placeholder="Job link, CTC range, location, notice period…">${esc(d.notes || '')}</textarea></div>
+    <button class="btn pri block" type="submit">${ic('check')}Save</button>
+    ${o ? `<button class="btn danger block" type="button" data-act="delOpp" data-id="${o.id}" style="margin-top:10px">Delete opportunity</button>` : ''}
+  </form>`);
+}
+
+function openCall(oppId, callId) {
+  const x = callId ? S.calls.find((c) => c.id === callId) : null;
+  const o = oppOf(x ? x.opportunity_id : oppId); if (!o) return;
+  const c = companyOf(o) || {};
+  const d = x || { direction: 'Incoming', outcome: 'Interested', call_at: new Date().toISOString(), contact_name: c.hr_name || '' };
+  openSheet(x ? 'Edit call' : 'Log call', `
+  <form data-form="call"><input type="hidden" name="id" value="${x ? x.id : ''}"><input type="hidden" name="opportunity_id" value="${o.id}">
+    <p class="sub" style="margin:-6px 0 14px">${esc(c.name || '')} · ${esc(o.role)}</p>
+    <div class="grid2"><div class="field"><label>Direction</label><select name="direction">${opts(CALL_DIR, d.direction)}</select></div>
+      <div class="field"><label>Duration (min)</label><input type="number" name="duration_min" min="0" inputmode="numeric" value="${esc(d.duration_min ?? '')}" placeholder="10"></div></div>
+    <div class="field"><label>Date &amp; time</label><input type="datetime-local" name="call_at" required value="${toLocalInput(d.call_at)}"></div>
+    <div class="field"><label>Spoke with</label><input type="text" name="contact_name" value="${esc(d.contact_name || '')}" placeholder="Recruiter / HR name"></div>
+    <div class="grid2"><div class="field"><label>Outcome</label><select name="outcome">${opts(CALL_OUTCOMES, d.outcome)}</select></div>
+      <div class="field"><label>Call back / follow up</label><input type="date" name="next_action_on" value="${esc(d.next_action_on || '')}"></div></div>
+    <div class="field"><label>Notes</label><textarea name="notes" rows="4" style="min-height:90px" placeholder="What was discussed: JD, CTC, notice period, next steps…">${esc(d.notes || '')}</textarea></div>
+    <button class="btn pri block" type="submit">${ic('check')}Save</button>
+    ${x ? `<button class="btn danger block" type="button" data-act="delCall" data-id="${x.id}" style="margin-top:10px">Delete call</button>` : ''}
+  </form>`);
+}
+
+async function resolveCompany(f) {
+  if (f.company_id !== '__new') return f.company_id;
+  if (!(f.new_name || '').trim()) throw Object.assign(new Error('Enter the company name'), { soft: true });
+  const c = await api.save('companies', { name: f.new_name.trim(), hr_name: f.new_hr_name.trim() || null, hr_phone: f.new_hr_phone.trim() || null, hr_email: f.new_hr_email.trim() || null });
+  return c.id;
+}
+const saveErr = (e) => toast(e.soft ? e.message : 'Save failed: ' + (e.message || e));
+// a first real conversation / interview moves a "Lead" to "In process"
+async function bumpOpp(o) { if (o && o.status === 'lead') await api.save('opportunities', { id: o.id, status: 'active' }); }
+
 async function submitInterview(form) {
   const f = Object.fromEntries(new FormData(form));
   try {
-    let company_id = f.company_id;
-    if (company_id === '__new') {
-      if (!f.new_name.trim()) return toast('Enter the company name');
-      const c = await api.save('companies', { name: f.new_name.trim(), hr_name: f.new_hr_name.trim() || null, hr_phone: f.new_hr_phone.trim() || null, hr_email: f.new_hr_email.trim() || null });
-      company_id = c.id;
-    }
+    const opp = f.company_id !== '__new' && f.opportunity_id ? oppOf(f.opportunity_id) : null;
+    const company_id = opp ? opp.company_id : await resolveCompany(f);
     const row = {
       company_id, role: f.role.trim(), round: f.round, mode: f.mode,
       interview_at: f.interview_at ? new Date(f.interview_at).toISOString() : null,
       status: f.status, followup_on: f.followup_on || null, notes: f.notes.trim() || null
     };
+    if (S.oppReady) row.opportunity_id = opp ? opp.id : null;
     if (f.id) row.id = f.id;
     await api.save('interviews', row);
+    await bumpOpp(opp);
     await loadAll(); closeSheet(); render(true); toast('Saved');
-  } catch (e) { toast('Save failed: ' + (e.message || e)); }
+  } catch (e) { saveErr(e); }
+}
+async function submitOpportunity(form) {
+  const f = Object.fromEntries(new FormData(form));
+  try {
+    const row = { company_id: await resolveCompany(f), role: f.role.trim(), source: f.source, status: f.status, notes: f.notes.trim() || null };
+    if (f.id) row.id = f.id;
+    const saved = await api.save('opportunities', row);
+    await loadAll(); closeSheet();
+    if (!f.id) { S.oppId = saved.id; render(); } else render(true);   // new opportunity opens straight into its detail page
+    toast('Saved');
+  } catch (e) { saveErr(e); }
+}
+async function submitCall(form) {
+  const f = Object.fromEntries(new FormData(form));
+  try {
+    const row = {
+      opportunity_id: f.opportunity_id, call_at: new Date(f.call_at).toISOString(), direction: f.direction,
+      contact_name: f.contact_name.trim() || null, duration_min: f.duration_min === '' ? null : Math.max(0, parseInt(f.duration_min, 10) || 0),
+      outcome: f.outcome, notes: f.notes.trim() || null, next_action_on: f.next_action_on || null
+    };
+    if (f.id) row.id = f.id;
+    const o = oppOf(f.opportunity_id);
+    await api.save('calls', row);
+    if (POSITIVE_CALL.includes(f.outcome)) await bumpOpp(o);
+    await loadAll(); closeSheet(); render(true); toast('Call saved');
+    if (!f.id && f.outcome === 'Interview scheduled' && o) openInterview(null, { opportunity_id: o.id, company_id: o.company_id, role: o.role });   // natural next step
+  } catch (e) { saveErr(e); }
+}
+// Group interviews that pre-date opportunities by company + role, and link them
+async function linkLegacy() {
+  try {
+    const orphans = S.interviews.filter((i) => !i.opportunity_id);
+    const groups = new Map();
+    orphans.forEach((i) => { const k = i.company_id + '|' + (i.role || '').trim().toLowerCase(); (groups.get(k) || groups.set(k, []).get(k)).push(i); });
+    for (const list of groups.values()) {
+      const first = list[0];
+      let opp = S.opportunities.find((o) => o.company_id === first.company_id && o.role.trim().toLowerCase() === (first.role || '').trim().toLowerCase());
+      if (!opp) {
+        const status = list.some((i) => i.status === 'selected') ? 'offer' : list.every((i) => FINAL.includes(i.status)) ? 'closed' : 'active';
+        opp = await api.save('opportunities', { company_id: first.company_id, role: first.role, source: 'Other', status });
+        S.opportunities.push(opp);
+      }
+      for (const i of list) await api.save('interviews', { id: i.id, opportunity_id: opp.id });
+    }
+    await loadAll(); render(true); toast(`Linked ${orphans.length} interview${orphans.length === 1 ? '' : 's'}`);
+  } catch (e) { toast('Could not link: ' + (e.message || e)); }
 }
 async function submitCompany(form) {
   const f = Object.fromEntries(new FormData(form));
@@ -497,9 +733,17 @@ document.addEventListener('click', async (e) => {
   if (el.classList.contains('sheet-wrap') && e.target !== el) return; // clicks inside the sheet
   const { act, id } = el.dataset;
   switch (act) {
-    case 'tab': S.tab = id; render(); break;
+    case 'tab': if (id === S.tab && id === 'opportunities') S.oppId = null; S.tab = id; render(); break;
     case 'filter': S.tab = 'interviews'; S.filter = id; render(true); break;
-    case 'add': S.tab === 'companies' ? openCompany() : openInterview(); break;
+    case 'add': S.tab === 'companies' ? openCompany() : S.tab === 'opportunities' ? openOpportunity() : openInterview(); break;
+    case 'openOpp': S.oppId = id; render(); break;
+    case 'oppBack': S.oppId = null; render(); break;
+    case 'editOpp': openOpportunity(id); break;
+    case 'newCall': openCall(id); break;
+    case 'editCall': openCall(null, id); break;
+    case 'newInt': { const o = oppOf(id); openInterview(null, { opportunity_id: o.id, company_id: o.company_id, role: o.role }); break; }
+    case 'ofilter': S.tab = 'opportunities'; S.oppId = null; S.ofilter = id; render(true); break;
+    case 'linkLegacy': linkLegacy(); break;
     case 'edit': openInterview(id); break;
     case 'editCompany': openCompany(id); break;
     case 'closeSheet': closeSheet(); break;
@@ -525,10 +769,20 @@ document.addEventListener('click', async (e) => {
       if (confirm('Delete this interview?')) { try { await api.del('interviews', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
       break;
     case 'delCompany': {
-      const n = S.interviews.filter((i) => i.company_id === id).length;
-      if (confirm(n ? `Delete this company and its ${n} interview(s)?` : 'Delete this company?')) { try { await api.del('companies', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
+      const n = S.interviews.filter((i) => i.company_id === id).length, k = S.opportunities.filter((o) => o.company_id === id).length;
+      if (confirm(n || k ? `Delete this company, its ${plural(k, 'opportunity').replace('opportunitys', 'opportunities')} (with call logs) and ${plural(n, 'interview')}?` : 'Delete this company?')) { try { await api.del('companies', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
       break;
     }
+    case 'delOpp': {
+      const n = oppCalls(id).length, m = oppInts(id).length;
+      if (confirm(`Delete this opportunity${n ? ` and its ${plural(n, 'call')}` : ''}?${m ? ` Its ${plural(m, 'interview')} will be kept but unlinked.` : ''}`)) {
+        try { await api.del('opportunities', id); S.oppId = null; await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); }
+      }
+      break;
+    }
+    case 'delCall':
+      if (confirm('Delete this call?')) { try { await api.del('calls', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
+      break;
     case 'signout': await sb.auth.signOut(); location.reload(); break;
   }
 });
@@ -536,12 +790,13 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('submit', (e) => {
   const f = e.target.closest('form[data-form]'); if (!f) return;
   e.preventDefault();
-  ({ interview: submitInterview, company: submitCompany }[f.dataset.form])(f);
+  ({ interview: submitInterview, company: submitCompany, opportunity: submitOpportunity, call: submitCall }[f.dataset.form])(f);
 });
 
 document.addEventListener('input', (e) => {
   const t = e.target;
   if (t.id === 'q') { S.q = t.value; $('#list').innerHTML = listHtml(); }
+  else if (t.id === 'oq') { S.oq = t.value; $('#olist').innerHTML = oppListHtml(); }
   else if (t.id === 'fuSub') S.fu.subject = t.value;
   else if (t.id === 'fuBody') S.fu.body = t.value;
   else if (t.id === 'shPhone') S.share.toPhone = t.value;
@@ -556,7 +811,15 @@ document.addEventListener('change', (e) => {
   else if (t.id === 'shCo') {
     const c = S.companies.find((x) => x.id === t.value); if (!c) return;
     S.share.toPhone = c.hr_phone || ''; S.share.toMail = c.hr_email || ''; $('#shPhone').value = S.share.toPhone; $('#shMail').value = S.share.toMail;
-  } else if (t.id === 'coSel') { $('#newCo').hidden = t.value !== '__new'; }
+  } else if (t.id === 'coSel') {
+    $('#newCo').hidden = t.value !== '__new';
+    const os = $('#oppSel');   // keep the opportunity link consistent with the company
+    if (os && os.value && (oppOf(os.value) || {}).company_id !== t.value) os.value = '';
+  } else if (t.id === 'oppSel') {
+    const o = oppOf(t.value), fo = t.closest('form'); if (!o) return;
+    fo.elements.company_id.value = o.company_id; $('#newCo').hidden = true;
+    if (!fo.elements.role.value.trim()) fo.elements.role.value = o.role;
+  }
   else if (t.name === 'status' && t.closest('form[data-form=interview]')) {
     const fo = t.closest('form').elements.followup_on;
     if (!fo.value) { const days = { completed: 3, awaiting: 3, hold: 7 }[t.value]; if (days) fo.value = todayStr(days); }
