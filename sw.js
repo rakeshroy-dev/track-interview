@@ -1,7 +1,7 @@
 // Service worker: offline app shell.
 // Same-origin files: network first (so updates show immediately), cache fallback offline.
 // CDN library: cache first. Supabase API calls are never cached.
-const VERSION = 'interview-tracker-v3';
+const VERSION = 'interview-tracker-v4';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',

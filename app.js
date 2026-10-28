@@ -45,11 +45,44 @@ Object.assign(ICONS, {
   video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
   pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
   back: '<polyline points="15 18 9 12 15 6"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>',
+  moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'
 });
 const MODE_IC = { Video: 'video', Phone: 'phone', Onsite: 'pin' };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+
+/* ---------- theme (system / light / dark) ---------- */
+const THEME_KEY = 'it_theme';
+const getPref = () => { try { const t = localStorage.getItem(THEME_KEY); return t === 'light' || t === 'dark' ? t : 'system'; } catch { return 'system'; } };
+const isDark = () => { const p = getPref(); return p === 'dark' || (p === 'system' && matchMedia('(prefers-color-scheme: dark)').matches); };
+const themeInner = (labeled) => ic(isDark() ? 'sun' : 'moon') + (labeled ? `<span>${isDark() ? 'Light theme' : 'Dark theme'}</span>` : '');
+const themeBtn = (cls = '', labeled = false) =>
+  `<button type="button" class="theme-btn ${cls}" data-act="theme" data-labeled="${labeled ? 1 : ''}" aria-label="Switch to ${isDark() ? 'light' : 'dark'} theme" title="Switch to ${isDark() ? 'light' : 'dark'} theme">${themeInner(labeled)}</button>`;
+function applyTheme() {
+  const r = document.documentElement, p = getPref();
+  if (p === 'system') delete r.dataset.theme; else r.dataset.theme = p;
+  const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = isDark() ? '#0b1020' : '#4f46e5';
+  $$('.theme-btn').forEach((b) => {
+    b.innerHTML = themeInner(!!b.dataset.labeled);
+    const to = isDark() ? 'light' : 'dark'; b.setAttribute('aria-label', `Switch to ${to} theme`); b.title = `Switch to ${to} theme`;
+  });
+}
+function setPref(p) { try { p === 'system' ? localStorage.removeItem(THEME_KEY) : localStorage.setItem(THEME_KEY, p); } catch {} applyTheme(); }
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme); } catch {}
+
+/* ---------- loader: show a spinner on the control until an async action finishes ---------- */
+async function withBusy(el, fn) {
+  if (!el || el.classList.contains('busy')) return;
+  const added = !el.querySelector(':scope > .spin');
+  let sp = null;
+  if (added) { sp = document.createElement('span'); sp.className = 'spin'; sp.setAttribute('aria-hidden', 'true'); el.appendChild(sp); }
+  el.classList.add('busy'); el.setAttribute('aria-busy', 'true');
+  try { return await fn(); }
+  finally { el.classList.remove('busy'); el.removeAttribute('aria-busy'); if (sp) sp.remove(); }
+}
 
 /* ---------- dates ---------- */
 const todayStr = (off = 0) => {
@@ -239,7 +272,7 @@ const NAV = [['interviews', 'list', 'Interviews'], ['opportunities', 'briefcase'
 
 function renderShell() {
   $('#nav').innerHTML = `<div class="brand"><img src="icons/icon-192.png" alt="">Interview Tracker</div>` +
-    NAV.map(([k, i, l]) => `<button data-act="tab" data-id="${k}" data-tab="${k}">${ic(i)}<span>${l}</span></button>`).join('');
+    NAV.map(([k, i, l]) => `<button data-act="tab" data-id="${k}" data-tab="${k}">${ic(i)}<span>${l}</span></button>`).join('') + themeBtn('', true);
   $('#fab').innerHTML = ic('plus');
 }
 
@@ -311,7 +344,7 @@ function vInterviews() {
   const due = S.interviews.filter(isDue).length;
   const st = (n, l, f, icon, tone) => `<button class="stat ${tone}" data-act="filter" data-id="${f}"><div class="stat-ic">${ic(icon)}</div><b>${n}</b><span>${l}</span></button>`;
   const initials = (P.name || '').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
-  return `<header class="top top-row"><div><p class="eyebrow">${greeting()}, ${esc((P.name || '').split(' ')[0])}</p><h1>Interviews</h1></div><div class="me" title="${esc(P.name)}">${esc(initials)}</div></header>
+  return `<header class="top top-row"><div><p class="eyebrow">${greeting()}, ${esc((P.name || '').split(' ')[0])}</p><h1>Interviews</h1></div><div class="top-actions">${themeBtn()}<div class="me" title="${esc(P.name)}">${esc(initials)}</div></div></header>
     <section class="stats">${st(up, 'Upcoming', 'upcoming', 'calendar', 't-indigo')}${st(aw, 'Awaiting', 'awaiting', 'clock', 't-amber')}${st(due, 'Follow-ups due', 'due', 'bell', due ? 't-red' : 't-green')}</section>
     <div class="search">${ic('search')}<input id="q" type="search" placeholder="Search company or role" value="${esc(S.q)}" autocomplete="off"></div>
     <div class="chips scroll">${FILTERS.map(([k, l]) => `<button class="chip ${S.filter === k ? 'on' : ''}" data-act="filter" data-id="${k}">${l}</button>`).join('')}</div>
@@ -477,7 +510,7 @@ function vFollowup() {
         <span>${ic('user', 'sm')}${esc(c.hr_name || 'No HR name')}</span>
         <span>${ic('mail', 'sm')}${esc(c.hr_email || 'No email saved')}</span>
         <span>${ic('phone', 'sm')}${esc(c.hr_phone || 'No phone saved')}</span>
-        ${!c.hr_email || !c.hr_phone ? `<button class="chip" data-act="editCompany" data-id="${c.id}">Add contact</button>` : ''}
+        ${!c.hr_email || !c.hr_phone ? `<button class="chip" data-act="editCompany" data-id="${c.id}">${ic('plus', 'sm')} Add contact</button>` : ''}
       </div>
       <div class="field"><label for="fuSub">Subject</label><input type="text" id="fuSub" value="${esc(S.fu.subject)}"></div>
       <div class="field"><label for="fuBody">Message</label><textarea id="fuBody" rows="13">${esc(S.fu.body)}</textarea></div>
@@ -536,6 +569,8 @@ function vProfile() {
       <p class="hint" style="margin:0 0 10px">${esc(P.resume)}</p>
       <div class="btn-row" style="margin-top:0"><button class="btn pri" data-act="shFile">${ic('file')}Share PDF</button>
         <a class="btn" href="${esc(P.resume)}" download>${ic('download')}Download</a></div></div>
+    <div class="panel"><h2>Appearance</h2>
+      <div class="seg3">${[['system', 'monitor', 'System'], ['light', 'sun', 'Light'], ['dark', 'moon', 'Dark']].map(([k, i, l]) => `<button class="chip ${getPref() === k ? 'on' : ''}" data-act="themeSet" data-id="${k}">${ic(i, 'sm')}${l}</button>`).join('')}</div></div>
     <div class="panel"><h2>Account</h2>
       <p class="hint" style="margin:0 0 10px">${useSB ? `Synced with Supabase${S.user ? ' as ' + esc(S.user.email) : ''}.` : 'Demo mode: data is stored only in this browser. Add your Supabase keys in config.js to sync across devices.'}</p>
       ${useSB ? `<button class="btn block" data-act="signout">${ic('logout')}Sign out</button>` : ''}</div>`;
@@ -733,6 +768,8 @@ document.addEventListener('click', async (e) => {
   if (el.classList.contains('sheet-wrap') && e.target !== el) return; // clicks inside the sheet
   const { act, id } = el.dataset;
   switch (act) {
+    case 'theme': setPref(isDark() ? 'light' : 'dark'); if (S.tab === 'profile') render(true); break;
+    case 'themeSet': setPref(id); render(true); break;
     case 'tab': if (id === S.tab && id === 'opportunities') S.oppId = null; S.tab = id; render(); break;
     case 'filter': S.tab = 'interviews'; S.filter = id; render(true); break;
     case 'add': S.tab === 'companies' ? openCompany() : S.tab === 'opportunities' ? openOpportunity() : openInterview(); break;
@@ -743,7 +780,7 @@ document.addEventListener('click', async (e) => {
     case 'editCall': openCall(null, id); break;
     case 'newInt': { const o = oppOf(id); openInterview(null, { opportunity_id: o.id, company_id: o.company_id, role: o.role }); break; }
     case 'ofilter': S.tab = 'opportunities'; S.oppId = null; S.ofilter = id; render(true); break;
-    case 'linkLegacy': linkLegacy(); break;
+    case 'linkLegacy': await withBusy(el, linkLegacy); break;
     case 'edit': openInterview(id); break;
     case 'editCompany': openCompany(id); break;
     case 'closeSheet': closeSheet(); break;
@@ -751,46 +788,51 @@ document.addEventListener('click', async (e) => {
     case 'tpl': fillFu(id); render(true); break;
     case 'snooze': {
       const i = findI(S.fu.id);
-      try { await api.save('interviews', { id: i.id, followup_on: +id ? todayStr(+id) : null }); await loadAll(); render(true); toast(+id ? 'Follow-up scheduled' : 'Follow-up cleared'); }
-      catch (err) { toast(err.message); }
+      await withBusy(el, async () => {
+        try { await api.save('interviews', { id: i.id, followup_on: +id ? todayStr(+id) : null }); await loadAll(); render(true); toast(+id ? 'Follow-up scheduled' : 'Follow-up cleared'); }
+        catch (err) { toast(err.message); }
+      });
       break;
     }
     case 'fuMail': { const c = companyOf(findI(S.fu.id)) || {}; if (!c.hr_email) toast('No HR email saved. Opening mail app anyway.'); location.href = mailHref(c.hr_email, S.fu.subject, S.fu.body); break; }
     case 'fuWa': { const c = companyOf(findI(S.fu.id)) || {}; window.open(waHref(c.hr_phone, S.fu.body), '_blank', 'noopener'); break; }
     case 'fuCopy': copyText(`Subject: ${S.fu.subject}\n\n${S.fu.body}`); break;
-    case 'fuResume': shareFile(S.fu.body); break;
+    case 'fuResume': await withBusy(el, () => shareFile(S.fu.body)); break;
     case 'shAll': case 'shNone': SHARE_ITEMS.forEach(([k]) => (S.share[k] = act === 'shAll')); S.share.text = profileText(); render(true); break;
     case 'shCopy': copyText($('#shText').value); break;
     case 'shWa': window.open(waHref(S.share.toPhone, $('#shText').value), '_blank', 'noopener'); break;
     case 'shMail': location.href = mailHref(S.share.toMail, `${P.name} – Profile & Resume`, $('#shText').value); break;
     case 'shNative': nativeShare($('#shText').value); break;
-    case 'shFile': shareFile($('#shText').value); break;
+    case 'shFile': await withBusy(el, () => shareFile($('#shText').value)); break;
     case 'delInterview':
-      if (confirm('Delete this interview?')) { try { await api.del('interviews', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
+      if (confirm('Delete this interview?')) await withBusy(el, async () => { try { await api.del('interviews', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } });
       break;
     case 'delCompany': {
       const n = S.interviews.filter((i) => i.company_id === id).length, k = S.opportunities.filter((o) => o.company_id === id).length;
-      if (confirm(n || k ? `Delete this company, its ${plural(k, 'opportunity').replace('opportunitys', 'opportunities')} (with call logs) and ${plural(n, 'interview')}?` : 'Delete this company?')) { try { await api.del('companies', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
+      if (confirm(n || k ? `Delete this company, its ${plural(k, 'opportunity').replace('opportunitys', 'opportunities')} (with call logs) and ${plural(n, 'interview')}?` : 'Delete this company?')) await withBusy(el, async () => { try { await api.del('companies', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } });
       break;
     }
     case 'delOpp': {
       const n = oppCalls(id).length, m = oppInts(id).length;
       if (confirm(`Delete this opportunity${n ? ` and its ${plural(n, 'call')}` : ''}?${m ? ` Its ${plural(m, 'interview')} will be kept but unlinked.` : ''}`)) {
-        try { await api.del('opportunities', id); S.oppId = null; await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); }
+        await withBusy(el, async () => { try { await api.del('opportunities', id); S.oppId = null; await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } });
       }
       break;
     }
     case 'delCall':
-      if (confirm('Delete this call?')) { try { await api.del('calls', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } }
+      if (confirm('Delete this call?')) await withBusy(el, async () => { try { await api.del('calls', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } });
       break;
-    case 'signout': await sb.auth.signOut(); location.reload(); break;
+    case 'signout': await withBusy(el, async () => { await sb.auth.signOut(); location.reload(); await new Promise(() => {}); }); break;
   }
 });
 
 document.addEventListener('submit', (e) => {
   const f = e.target.closest('form[data-form]'); if (!f) return;
   e.preventDefault();
-  ({ interview: submitInterview, company: submitCompany, opportunity: submitOpportunity, call: submitCall }[f.dataset.form])(f);
+  if (f.classList.contains('saving')) return;
+  const run = { interview: submitInterview, company: submitCompany, opportunity: submitOpportunity, call: submitCall }[f.dataset.form];
+  f.classList.add('saving');
+  withBusy(f.querySelector('[type=submit]'), () => run(f)).finally(() => f.classList.remove('saving'));
 });
 
 document.addEventListener('input', (e) => {
@@ -848,7 +890,7 @@ function showLogin() {
   const feat = (i, t, d) => `<li><span class="f-ic">${ic(i)}</span><div><b>${t}</b><small>${d}</small></div></li>`;
   const pw = (id, label, name, ph, ac, extra = '') => `<div class="field" ${extra}><label for="${id}">${label}</label><div class="input">${ic('lock', 'lead')}<input id="${id}" type="password" name="${name}" placeholder="${ph}" autocomplete="${ac}"><button type="button" class="eye" data-eye="${id}" aria-label="Show password" aria-pressed="false">${ic('eye')}</button></div></div>`;
   $('#view').innerHTML = `<div class="auth">
-    <section class="auth-hero"><div class="blob b1"></div><div class="blob b2"></div>
+    <section class="auth-hero">${themeBtn('auth-theme')}<div class="blob b1"></div><div class="blob b2"></div>
       <div class="hero-in"><img class="logo" src="icons/icon-192.png" alt=""><p class="kicker">Interview Tracker</p>
         <h1>Every interview.<br>One calm place.</h1>
         <p class="lead">Dates, recruiter contacts and follow-ups, organised so you never miss a reply.</p>
@@ -949,6 +991,7 @@ const skeleton = () => `<header class="top"><div class="skel" style="height:56px
 
 async function init() {
   renderShell();
+  applyTheme();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (useSB) {
     if (!window.supabase) {
