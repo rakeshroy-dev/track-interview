@@ -1,11 +1,11 @@
 -- =====================================================================
--- Interview Tracker – Supabase schema (4 tables, RLS enabled)
+-- Interview Tracker – Supabase schema (5 tables, RLS enabled)
 -- Run in: Supabase Dashboard → SQL Editor → New query → Run
 -- Safe to re-run: existing projects only get the new objects added
 -- (opportunities, calls, interviews.opportunity_id); no data is touched.
 --
 --   companies ──< opportunities ──< calls
---                      └──────────< interviews   (interview history per opportunity)
+--                      └──────────< interviews ──< interview_questions   (Q&A, incl. code)
 -- =====================================================================
 
 -- 1) Companies (one row per company + its HR contact)
@@ -71,6 +71,21 @@ create table if not exists public.calls (
 alter table public.interviews
   add column if not exists opportunity_id uuid references public.opportunities(id) on delete set null;
 
+-- 5) Interview questions & answers (what was asked in a round, your answer, optional code)
+create table if not exists public.interview_questions (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  interview_id  uuid not null references public.interviews(id) on delete cascade,
+  kind          text not null default 'concept' check (kind in ('concept','coding')),
+  question      text not null,
+  answer        text,
+  language      text,                              -- for coding questions
+  code          text,                              -- for coding questions
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create index if not exists iq_interview_idx on public.interview_questions (interview_id, created_at);
+
 create index if not exists opportunities_user_idx   on public.opportunities (user_id);
 create index if not exists opportunities_company_idx on public.opportunities (company_id);
 create index if not exists calls_opportunity_idx    on public.calls (opportunity_id, call_at desc);
@@ -89,6 +104,10 @@ drop trigger if exists trg_opportunities_touch on public.opportunities;
 create trigger trg_opportunities_touch before update on public.opportunities
 for each row execute function public.touch_updated_at();
 
+drop trigger if exists trg_iq_touch on public.interview_questions;
+create trigger trg_iq_touch before update on public.interview_questions
+for each row execute function public.touch_updated_at();
+
 drop trigger if exists trg_interviews_touch on public.interviews;
 create trigger trg_interviews_touch before update on public.interviews
 for each row execute function public.touch_updated_at();
@@ -98,11 +117,13 @@ alter table public.companies  enable row level security;
 alter table public.interviews enable row level security;
 alter table public.opportunities enable row level security;
 alter table public.calls enable row level security;
+alter table public.interview_questions enable row level security;
 
 drop policy if exists "own companies"  on public.companies;
 drop policy if exists "own interviews" on public.interviews;
 drop policy if exists "own opportunities" on public.opportunities;
 drop policy if exists "own calls" on public.calls;
+drop policy if exists "own questions" on public.interview_questions;
 
 create policy "own companies"  on public.companies
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
@@ -114,6 +135,9 @@ create policy "own opportunities" on public.opportunities
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 create policy "own calls" on public.calls
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+create policy "own questions" on public.interview_questions
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- ---------------------------------------------------------------------

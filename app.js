@@ -118,6 +118,8 @@ const STATUS = {
   awaiting: 'Awaiting feedback', hold: 'On hold', selected: 'Selected', rejected: 'Rejected', cancelled: 'Cancelled'
 };
 const FINAL = ['selected', 'rejected', 'cancelled'];
+const HELD = ['completed', 'awaiting', 'hold', 'selected', 'rejected'];   // interviews that have taken place -> Q&A applies
+const LANGS = ['Python', 'SQL', 'JavaScript', 'Java', 'Bash', 'Other'];
 const ROUNDS = ['Screening', 'HR', 'Technical L1', 'Technical L2', 'Managerial', 'Client', 'Final', 'Other'];
 const MODES = ['Video', 'Phone', 'Onsite'];
 const FILTERS = [
@@ -169,6 +171,39 @@ const SUGGEST = {
   hold: 'nudge', selected: 'details', rejected: 'thanks', cancelled: 'cancel'
 };
 
+/* ============================ code display helpers ============================ */
+const KW = {
+  Python: 'def class return if elif else for while in not and or is None True False import from as with try except finally raise lambda yield pass break continue async await global nonlocal assert del print self',
+  SQL: 'select from where group by order having join left right inner outer full on as and or not in is null insert into values update set delete create table alter drop index limit offset union all distinct case when then else end like between exists count sum avg min max over partition with desc asc',
+  JavaScript: 'const let var function return if else for while of in new class extends import from export default async await try catch finally throw switch case break continue null undefined true false this typeof',
+  Java: 'public private protected static final class interface extends implements new return if else for while try catch finally throw throws switch case break continue null true false this void int long double boolean String import package',
+  Bash: 'if then else elif fi for while do done in case esac function echo cd ls grep sed awk export return exit'
+};
+const COMMENT = { Python: '#', Bash: '#', SQL: '--', JavaScript: '//', Java: '//' };
+function highlight(code, lang) {
+  const cm = COMMENT[lang], kws = new Set((KW[lang] || '').split(' ')), ci = lang === 'SQL';
+  const cmRe = cm ? cm.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&') + '.*' : '(?!)';
+  const re = new RegExp(`(${cmRe})|("""[\\s\\S]*?"""|\'\'\'[\\s\\S]*?\'\'\'|"(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'|\`[^\`]*\`)|(\\b\\d+(?:\\.\\d+)?\\b)|([A-Za-z_]\\w*)`, 'g');
+  const lines = [''];
+  const add = (cls, text) => text.split('\n').forEach((part, k) => {
+    if (k) lines.push('');
+    if (part) lines[lines.length - 1] += cls ? `<span class="tk-${cls}">${esc(part)}</span>` : esc(part);
+  });
+  let last = 0, m;
+  while ((m = re.exec(code))) {
+    if (m.index > last) add('', code.slice(last, m.index));
+    if (m[1] !== undefined) add('com', m[0]);
+    else if (m[2] !== undefined) add('str', m[0]);
+    else if (m[3] !== undefined) add('num', m[0]);
+    else add(kws.has(ci ? m[4].toLowerCase() : m[4]) ? 'kw' : '', m[0]);
+    last = re.lastIndex;
+    if (m[0] === '') re.lastIndex++;
+  }
+  if (last < code.length) add('', code.slice(last));
+  return lines.map((l) => `<span class="ln">${l || ' '}</span>`).join('');
+}
+const codeBlock = (q) => `<div class="code-wrap"><div class="code-bar"><span>${esc(q.language || 'code')}</span><button type="button" class="ed-btn" data-act="copyCode" data-id="${q.id}">${ic('copy', 'sm')}Copy</button></div><pre class="code"><code>${highlight(q.code, q.language)}</code></pre></div>`;
+
 /* ============================ data layer ============================ */
 let sb = null;
 const useSB = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
@@ -198,7 +233,10 @@ const api = {
   async del(t, id) {
     if (!useSB) {
       store.set(t, store.get(t).filter((r) => r.id !== id));
+      if (t === 'interviews') store.set('interview_questions', store.get('interview_questions').filter((q) => q.interview_id !== id));
       if (t === 'companies') {
+        const gone = store.get('interviews').filter((r) => r.company_id === id).map((r) => r.id);
+        store.set('interview_questions', store.get('interview_questions').filter((q) => !gone.includes(q.interview_id)));
         const oppIds = store.get('opportunities').filter((o) => o.company_id === id).map((o) => o.id);
         store.set('interviews', store.get('interviews').filter((r) => r.company_id !== id));
         store.set('opportunities', store.get('opportunities').filter((o) => o.company_id !== id));
@@ -220,6 +258,7 @@ const S = {
   tab: 'interviews', filter: 'all', q: '',
   companies: [], interviews: [], opportunities: [], calls: [], oppReady: true,
   oppId: null, ofilter: 'all', oq: '',
+  questions: [], qaReady: true, qaId: null,
   fu: { id: null, tpl: null, subject: '', body: '' },
   share: { phone: true, email: true, portfolio: true, linkedin: true, resume: true, toPhone: '', toMail: '', text: null }
 };
@@ -243,7 +282,12 @@ async function loadAll() {
     [S.opportunities, S.calls] = await Promise.all([api.list('opportunities'), api.list('calls')]);
     S.oppReady = true;
   } catch (e) { S.opportunities = []; S.calls = []; S.oppReady = false; }
+  try { S.questions = await api.list('interview_questions'); S.qaReady = true; }
+  catch (e) { S.questions = []; S.qaReady = false; }
 }
+const qCount = (id) => S.questions.filter((q) => q.interview_id === id).length;
+const qaChip = (i) => (S.qaReady && HELD.includes(i.status)
+  ? `<button type="button" class="chip-s qa-link" data-act="openQA" data-id="${i.id}">${ic('file', 'sm')}${qCount(i.id) ? 'Q&amp;A · ' + qCount(i.id) : 'Add Q&amp;A'}</button>` : '');
 
 /* ============================ UI utilities ============================ */
 let toastT;
@@ -272,16 +316,30 @@ const NAV = [['interviews', 'list', 'Interviews'], ['opportunities', 'briefcase'
 
 function renderShell() {
   $('#nav').innerHTML = `<div class="brand"><img src="icons/icon-192.png" alt="">Interview Tracker</div>` +
-    NAV.map(([k, i, l]) => `<button data-act="tab" data-id="${k}" data-tab="${k}">${ic(i)}<span>${l}</span></button>`).join('') + themeBtn('', true);
+    NAV.map(([k, i, l]) => `<button data-act="tab" data-id="${k}" data-tab="${k}">${ic(i)}<span>${l}</span></button>`).join('');
   $('#fab').innerHTML = ic('plus');
+  renderTopbar();
+}
+
+/* ---------- fixed top bar (all pages) ---------- */
+function renderTopbar() {
+  const initials = (P.name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  $('#topbar').innerHTML = `
+    <div class="tb-left"><span class="tb-brand"><img src="icons/icon-192.png" alt="">Interview Tracker</span><span class="tb-title" id="tbTitle"></span></div>
+    <div class="tb-right">
+      ${themeBtn()}
+      ${useSB ? `<button type="button" class="tb-btn" data-act="signout" aria-label="Sign out" title="Sign out">${ic('logout')}</button>` : ''}
+      <div class="me" title="${esc(P.name || '')}${S.user && S.user.email ? ' · ' + esc(S.user.email) : ''}">${esc(initials)}</div>
+    </div>`;
 }
 
 let enterT;
 function render(keepScroll) {
-  const v = { interviews: vInterviews, opportunities: vOpportunities, followup: vFollowup, companies: vCompanies, profile: vProfile }[S.tab];
+  const v = S.qaId ? vQA : { interviews: vInterviews, opportunities: vOpportunities, followup: vFollowup, companies: vCompanies, profile: vProfile }[S.tab];
   $('#view').innerHTML = v();
   $$('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
-  $('#fab').hidden = !(['interviews', 'companies'].includes(S.tab) || (S.tab === 'opportunities' && !S.oppId));
+  const tt = $('#tbTitle'); if (tt) tt.textContent = (NAV.find((n) => n[0] === S.tab) || [])[2] || '';
+  $('#fab').hidden = !!S.qaId || !(['interviews', 'companies'].includes(S.tab) || (S.tab === 'opportunities' && !S.oppId));
   $('#fab').setAttribute('aria-label', { companies: 'Add company', opportunities: 'Add job opportunity' }[S.tab] || 'Add interview');
   if (!keepScroll) {
     const vw = $('#view'); vw.classList.remove('enter'); void vw.offsetWidth; vw.classList.add('enter');
@@ -319,6 +377,7 @@ function card(i, n) {
       <span>${ic('calendar', 'sm')}${i.interview_at ? esc(fmtDT(i.interview_at)) : 'Date not set'}</span>
       ${i.mode ? `<span>${ic(MODE_IC[i.mode] || 'clock', 'sm')}${esc(i.mode)}</span>` : ''}
       ${i.followup_on ? `<span class="${due ? 'due' : ''}">${ic('send', 'sm')}Follow up ${esc(fmtD(i.followup_on))}${due ? ' · due' : ''}</span>` : ''}
+      ${qaChip(i)}
     </div>
     <div class="actions">
       ${c.hr_phone ? `<a class="btn sm" href="${telHref(c.hr_phone)}">${ic('phone', 'sm')}Call</a>` : `<span class="btn sm off">${ic('phone', 'sm')}Call</span>`}
@@ -343,8 +402,7 @@ function vInterviews() {
   const aw = S.interviews.filter((i) => ['completed', 'awaiting'].includes(i.status)).length;
   const due = S.interviews.filter(isDue).length;
   const st = (n, l, f, icon, tone) => `<button class="stat ${tone}" data-act="filter" data-id="${f}"><div class="stat-ic">${ic(icon)}</div><b>${n}</b><span>${l}</span></button>`;
-  const initials = (P.name || '').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
-  return `<header class="top top-row"><div><p class="eyebrow">${greeting()}, ${esc((P.name || '').split(' ')[0])}</p><h1>Interviews</h1></div><div class="top-actions">${themeBtn()}<div class="me" title="${esc(P.name)}">${esc(initials)}</div></div></header>
+  return `<header class="top top-row"><div><p class="eyebrow">${greeting()}, ${esc((P.name || '').split(' ')[0])}</p><h1>Interviews</h1></div></header>
     <section class="stats">${st(up, 'Upcoming', 'upcoming', 'calendar', 't-indigo')}${st(aw, 'Awaiting', 'awaiting', 'clock', 't-amber')}${st(due, 'Follow-ups due', 'due', 'bell', due ? 't-red' : 't-green')}</section>
     <div class="search">${ic('search')}<input id="q" type="search" placeholder="Search company or role" value="${esc(S.q)}" autocomplete="off"></div>
     <div class="chips scroll">${FILTERS.map(([k, l]) => `<button class="chip ${S.filter === k ? 'on' : ''}" data-act="filter" data-id="${k}">${l}</button>`).join('')}</div>
@@ -438,6 +496,7 @@ function vOppDetail() {
         <div class="tl-top"><b>${esc(x.round || 'Interview')}</b><span class="badge s-${x.status}">${STATUS[x.status] || esc(x.status)}</span></div>
         <small>${x.interview_at ? esc(fmtDT(x.interview_at)) : 'Date not set'}${x.mode ? ' · ' + esc(x.mode) : ''}</small>
         ${x.notes ? `<p>${esc(x.notes)}</p>` : ''}
+        ${HELD.includes(x.status) ? `<div class="tl-chip">${qaChip(x)}</div>` : ''}
       </div></div>`;
   return `<button class="back" data-act="oppBack">${ic('back')}Job opportunities</button>
     <header class="top top-row"><div class="row"><div class="avatar lg">${esc((c.name || '?').trim()[0]?.toUpperCase())}</div>
@@ -455,6 +514,37 @@ function vOppDetail() {
     <div class="panel"><h2>Call log <span class="count">${calls.length}</span></h2>
       ${calls.length ? `<div class="tl">${calls.map(callItem).join('')}</div>` : `<p class="hint" style="margin:0">No calls logged yet. Tap “Log call” after speaking with the recruiter.</p>`}</div>
     ${o.notes ? `<div class="panel"><h2>Notes</h2><p class="note-text">${esc(o.notes)}</p></div>` : ''}`;
+}
+
+/* ---------- interview questions & answers ---------- */
+function qaCard(q, n) {
+  const coding = q.kind === 'coding';
+  return `<article class="card qa-card">
+    <div class="qa-head"><span class="qa-n">Q${n + 1}</span><span class="chip-s">${coding ? 'Coding' + (q.language ? ' · ' + esc(q.language) : '') : 'Concept'}</span><span class="grow"></span>
+      <button class="icon-btn" data-act="editQA" data-id="${q.id}" aria-label="Edit question">${ic('edit')}</button>
+      <button class="icon-btn" data-act="delQA" data-id="${q.id}" aria-label="Delete question">${ic('trash')}</button></div>
+    <p class="qa-q">${esc(q.question)}</p>
+    ${q.answer ? `<div class="qa-lbl">Answer</div><p class="qa-a">${esc(q.answer)}</p>` : ''}
+    ${coding && q.code ? codeBlock(q) : ''}
+  </article>`;
+}
+function vQA() {
+  const i = findI(S.qaId);
+  if (!i) { S.qaId = null; return vInterviews(); }
+  const c = companyOf(i) || {};
+  const qs = S.questions.filter((q) => q.interview_id === i.id).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+  const nCode = qs.filter((q) => q.kind === 'coding').length;
+  const body = !S.qaReady
+    ? `<div class="panel"><h2>One-time database update needed</h2><p class="hint" style="margin:0">Open Supabase → SQL Editor, paste the latest <b>supabase_schema.sql</b> and run it (safe to re-run), then reload this app.</p></div>`
+    : qs.length ? qs.map(qaCard).join('')
+      : `<div class="empty">${ic('file')}<h3>No questions yet</h3><p>Note what was asked in this round and how you answered. Add code for coding questions.</p><button class="btn pri" data-act="newQA" data-id="${i.id}">${ic('plus')}Add question</button></div>`;
+  return `<button class="back" data-act="qaBack">${ic('back')}Back</button>
+    <header class="top"><p class="eyebrow">${esc(c.name || 'Unknown company')} · ${esc(i.role)}</p><h1>Interview Q&amp;A</h1></header>
+    <div class="opp-meta"><span class="badge s-${i.status}">${STATUS[i.status] || esc(i.status)}</span>
+      <span>${ic('calendar', 'sm')}${esc(i.round || 'Round')}${i.interview_at ? ' · ' + esc(fmtDT(i.interview_at)) : ''}</span>
+      <span>${ic('file', 'sm')}${plural(qs.length, 'question')}${nCode ? ` (${nCode} coding)` : ''}</span></div>
+    ${S.qaReady && qs.length ? `<div class="btn-row opp-actions"><button class="btn pri" data-act="newQA" data-id="${i.id}">${ic('plus', 'sm')}Add question</button></div>` : ''}
+    <section class="list qa-list">${body}</section>`;
 }
 
 /* ---------- companies ---------- */
@@ -595,6 +685,7 @@ function openInterview(id, preset = {}) {
       <select name="opportunity_id" id="oppSel"><option value="">Not linked</option>${S.opportunities.map((o) => `<option value="${o.id}" ${d.opportunity_id === o.id ? 'selected' : ''}>${esc((companyOf(o) || {}).name || '?')} – ${esc(o.role)}</option>`).join('')}</select></div>` : '';
   openSheet(i ? 'Edit interview' : 'Add interview', `
   <form data-form="interview"><input type="hidden" name="id" value="${i ? i.id : ''}">
+    ${i && S.qaReady && HELD.includes(i.status) ? `<button type="button" class="btn block" data-act="openQA" data-id="${i.id}" style="margin-bottom:14px">${ic('file')}Interview questions &amp; answers${qCount(i.id) ? ' (' + qCount(i.id) + ')' : ''}</button>` : ''}
     ${oppField}
     ${companySelect(d.company_id, noCo)}
     <div class="field"><label>Role</label><input type="text" name="role" required value="${esc(d.role || '')}" placeholder="Python Backend Developer"></div>
@@ -657,6 +748,38 @@ function openCall(oppId, callId) {
     <button class="btn pri block" type="submit">${ic('check')}Save</button>
     ${x ? `<button class="btn danger block" type="button" data-act="delCall" data-id="${x.id}" style="margin-top:10px">Delete call</button>` : ''}
   </form>`);
+}
+
+function openQuestion(interviewId, qid) {
+  const q = qid ? S.questions.find((x) => x.id === qid) : null;
+  const d = q || { kind: 'concept', language: 'Python' };
+  const kindBtn = (k, icon, label) => `<button type="button" class="chip ${d.kind === k ? 'on' : ''}" data-act="qaKind" data-id="${k}">${ic(icon, 'sm')}${label}</button>`;
+  openSheet(q ? 'Edit question' : 'Add question', `
+  <form data-form="qa"><input type="hidden" name="id" value="${q ? q.id : ''}"><input type="hidden" name="interview_id" value="${q ? q.interview_id : interviewId}"><input type="hidden" name="kind" value="${d.kind}">
+    <div class="field"><label>Type</label><div class="seg3 seg2">${kindBtn('concept', 'chat', 'Concept')}${kindBtn('coding', 'file', 'Coding')}</div></div>
+    <div class="field"><label>Question</label><textarea name="question" rows="3" style="min-height:80px" required placeholder="e.g. Difference between select_related and prefetch_related?">${esc(d.question || '')}</textarea></div>
+    <div class="field"><label>Your answer / approach</label><textarea name="answer" rows="4" style="min-height:90px" placeholder="What you said, or the correct answer to remember">${esc(d.answer || '')}</textarea></div>
+    <div class="field" id="codeBox" ${d.kind === 'coding' ? '' : 'hidden'}><label>Code</label>
+      <div class="editor"><div class="editor-bar"><span class="dots"><i></i><i></i><i></i></span>
+        <select name="language" aria-label="Language">${opts(LANGS, d.language || 'Python')}</select>
+        <button type="button" class="ed-btn" data-act="edTab" aria-label="Insert tab">Tab ⇥</button></div>
+        <textarea name="code" id="qaCode" class="code-input" rows="10" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="# write the solution here">${esc(d.code || '')}</textarea></div></div>
+    <button class="btn pri block" type="submit">${ic('check')}Save</button>
+  </form>`);
+}
+async function submitQuestion(form) {
+  const f = Object.fromEntries(new FormData(form));
+  try {
+    const coding = f.kind === 'coding';
+    const row = {
+      interview_id: f.interview_id, kind: f.kind, question: f.question.trim(), answer: f.answer.trim() || null,
+      language: coding ? f.language : null, code: coding ? (f.code || '').replace(/\s+$/, '') || null : null
+    };
+    if (!row.question) throw Object.assign(new Error('Enter the question'), { soft: true });
+    if (f.id) row.id = f.id;
+    await api.save('interview_questions', row);
+    await loadAll(); closeSheet(); render(true); toast('Saved');
+  } catch (e) { saveErr(e); }
 }
 
 async function resolveCompany(f) {
@@ -767,9 +890,24 @@ document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   if (el.classList.contains('sheet-wrap') && e.target !== el) return; // clicks inside the sheet
   const { act, id } = el.dataset;
+  if (['tab', 'filter', 'ofilter', 'openOpp', 'follow', 'add'].includes(act)) S.qaId = null;
   switch (act) {
     case 'theme': setPref(isDark() ? 'light' : 'dark'); if (S.tab === 'profile') render(true); break;
     case 'themeSet': setPref(id); render(true); break;
+    case 'openQA': closeSheet(); S.qaId = id; render(); break;
+    case 'qaBack': S.qaId = null; render(); break;
+    case 'newQA': openQuestion(id); break;
+    case 'editQA': openQuestion(null, id); break;
+    case 'copyCode': { const q = S.questions.find((x) => x.id === id); if (q) copyText(q.code); break; }
+    case 'qaKind': {
+      const fo = el.closest('form'); fo.elements.kind.value = id;
+      $$('[data-act=qaKind]', fo).forEach((b) => b.classList.toggle('on', b.dataset.id === id));
+      $('#codeBox').hidden = id !== 'coding'; break;
+    }
+    case 'edTab': { const ta = $('#qaCode'); ta.focus(); ta.setRangeText('    ', ta.selectionStart, ta.selectionEnd, 'end'); break; }
+    case 'delQA':
+      if (confirm('Delete this question?')) await withBusy(el, async () => { try { await api.del('interview_questions', id); await loadAll(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } });
+      break;
     case 'tab': if (id === S.tab && id === 'opportunities') S.oppId = null; S.tab = id; render(); break;
     case 'filter': S.tab = 'interviews'; S.filter = id; render(true); break;
     case 'add': S.tab === 'companies' ? openCompany() : S.tab === 'opportunities' ? openOpportunity() : openInterview(); break;
@@ -822,7 +960,7 @@ document.addEventListener('click', async (e) => {
     case 'delCall':
       if (confirm('Delete this call?')) await withBusy(el, async () => { try { await api.del('calls', id); await loadAll(); closeSheet(); render(true); toast('Deleted'); } catch (err) { toast(err.message); } });
       break;
-    case 'signout': await withBusy(el, async () => { await sb.auth.signOut(); location.reload(); await new Promise(() => {}); }); break;
+    case 'signout': if (!confirm('Sign out of Interview Tracker?')) break; await withBusy(el, async () => { await sb.auth.signOut(); location.reload(); await new Promise(() => {}); }); break;
   }
 });
 
@@ -830,7 +968,7 @@ document.addEventListener('submit', (e) => {
   const f = e.target.closest('form[data-form]'); if (!f) return;
   e.preventDefault();
   if (f.classList.contains('saving')) return;
-  const run = { interview: submitInterview, company: submitCompany, opportunity: submitOpportunity, call: submitCall }[f.dataset.form];
+  const run = { interview: submitInterview, company: submitCompany, opportunity: submitOpportunity, call: submitCall, qa: submitQuestion }[f.dataset.form];
   f.classList.add('saving');
   withBusy(f.querySelector('[type=submit]'), () => run(f)).finally(() => f.classList.remove('saving'));
 });
@@ -868,7 +1006,25 @@ document.addEventListener('change', (e) => {
   }
 });
 
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
+document.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (t.classList && t.classList.contains('code-input')) {
+    const fire = () => t.dispatchEvent(new Event('input', { bubbles: true }));
+    const start = t.selectionStart, v = t.value, ls = v.lastIndexOf('\n', start - 1) + 1;
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.shiftKey) { const m = /^( {1,4}|\t)/.exec(v.slice(ls)); if (m) { t.setRangeText('', ls, ls + m[0].length, 'preserve'); t.selectionStart = t.selectionEnd = Math.max(ls, start - m[0].length); } }
+      else t.setRangeText('    ', start, t.selectionEnd, 'end');
+      fire();
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      const line = v.slice(ls, start), indent = /^[ \t]*/.exec(line)[0] + (/[:{(\[]\s*$/.test(line) ? '    ' : '');
+      t.setRangeText('\n' + indent, start, t.selectionEnd, 'end'); fire();
+    }
+    return;
+  }
+  if (e.key === 'Escape') closeSheet();
+});
 
 /* ============================ auth (Supabase) ============================ */
 function friendlyAuthError(err) {
@@ -1002,6 +1158,7 @@ async function init() {
     if (!data.session) return showLogin();
     S.user = data.session.user;
   }
+  $('#topbar').hidden = false; renderTopbar();
   $('#view').innerHTML = skeleton();
   await loadAll();
   render();
