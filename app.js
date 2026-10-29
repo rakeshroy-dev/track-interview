@@ -305,7 +305,8 @@ async function copyText(text) {
 }
 function openSheet(title, html) {
   $('#sheet').innerHTML = `<div class="sheet-wrap" data-act="closeSheet"><div class="sheet" role="dialog" aria-label="${esc(title)}">
-    <div class="grab"></div><div class="sheet-head"><h2>${esc(title)}</h2><button class="icon-btn" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div>${html}</div></div>`;
+    <div class="sheet-top"><div class="grab"></div><div class="sheet-head"><h2>${esc(title)}</h2><button class="icon-btn" data-act="closeSheet" aria-label="Close">${ic('x')}</button></div></div>
+    <div class="sheet-body">${html}</div></div></div>`;
   document.body.style.overflow = 'hidden';
 }
 function closeSheet() { $('#sheet').innerHTML = ''; document.body.style.overflow = ''; }
@@ -509,10 +510,10 @@ function vOppDetail() {
       <button class="btn pri" data-act="newCall" data-id="${o.id}">${ic('plus', 'sm')}Log call</button>
       <button class="btn" data-act="newInt" data-id="${o.id}">${ic('calendar', 'sm')}Interview</button>
     </div>
-    <div class="panel"><h2>Interview history <span class="count">${ints.length}</span></h2>
+    <div class="split two"><div class="panel"><h2>Interview history <span class="count">${ints.length}</span></h2>
       ${ints.length ? `<div class="tl">${ints.map(intItem).join('')}</div>` : `<p class="hint" style="margin:0">No rounds yet. Tap “Add interview” once a round is scheduled.</p>`}</div>
     <div class="panel"><h2>Call log <span class="count">${calls.length}</span></h2>
-      ${calls.length ? `<div class="tl">${calls.map(callItem).join('')}</div>` : `<p class="hint" style="margin:0">No calls logged yet. Tap “Log call” after speaking with the recruiter.</p>`}</div>
+      ${calls.length ? `<div class="tl">${calls.map(callItem).join('')}</div>` : `<p class="hint" style="margin:0">No calls logged yet. Tap “Log call” after speaking with the recruiter.</p>`}</div></div>
     ${o.notes ? `<div class="panel"><h2>Notes</h2><p class="note-text">${esc(o.notes)}</p></div>` : ''}`;
 }
 
@@ -590,7 +591,7 @@ function vFollowup() {
   const i = findI(S.fu.id), c = companyOf(i) || {};
   const sug = SUGGEST[i.status];
   return `<header class="top"><p class="eyebrow">Smart templates</p><h1>Follow-up</h1><p class="sub">Pick an interview and a situation. Edit the message, then send.</p></header>
-    <div class="panel">
+    <div class="split fu"><div class="panel">
       <div class="field"><label for="fuInt">Interview</label><select id="fuInt">${[...S.interviews].map((x) => `<option value="${x.id}" ${x.id === S.fu.id ? 'selected' : ''}>${esc((companyOf(x) || {}).name || '?')} – ${esc(x.role)} (${STATUS[x.status]})</option>`).join('')}</select></div>
       <p class="lbl" style="margin-bottom:8px">Situation</p>
       <div class="chips wrap">${TEMPLATES.map((t) => `<button class="chip ${S.fu.tpl === t.id ? 'on' : ''}" data-act="tpl" data-id="${t.id}">${t.label}${t.id === sug ? '<span class="tag">Suggested</span>' : ''}</button>`).join('')}</div>
@@ -616,7 +617,7 @@ function vFollowup() {
       <div class="chips wrap" style="margin:0">
         <button class="chip" data-act="snooze" data-id="2">in 2 days</button><button class="chip" data-act="snooze" data-id="3">in 3 days</button>
         <button class="chip" data-act="snooze" data-id="7">in 1 week</button><button class="chip" data-act="snooze" data-id="0">Clear</button>
-      </div>${i.followup_on ? `<p class="hint">Currently set for ${esc(fmtD(i.followup_on))}.</p>` : ''}</div>`;
+      </div>${i.followup_on ? `<p class="hint">Currently set for ${esc(fmtD(i.followup_on))}.</p>` : ''}</div></div>`;
 }
 
 /* ---------- share / profile ---------- */
@@ -638,7 +639,7 @@ function vProfile() {
   if (S.share.text === null) S.share.text = profileText();
   const withContact = S.companies.filter((c) => c.hr_phone || c.hr_email);
   return `<header class="top"><p class="eyebrow">Send to recruiters</p><h1>Share details</h1><p class="sub">Select what to include, then copy or send.</p></header>
-    <div class="panel"><h2>Include</h2>
+    <div class="split sh"><div class="panel"><h2>Include</h2>
       ${SHARE_ITEMS.map(([k, l, v]) => `<label class="check"><input type="checkbox" data-share="${k}" ${S.share[k] ? 'checked' : ''}><div><b>${l}</b><small>${esc(v())}</small></div></label>`).join('')}
       <div class="chips" style="margin:10px 0 0"><button class="chip" data-act="shAll">Select all</button><button class="chip" data-act="shNone">Clear</button></div>
     </div>
@@ -663,7 +664,7 @@ function vProfile() {
       <div class="seg3">${[['system', 'monitor', 'System'], ['light', 'sun', 'Light'], ['dark', 'moon', 'Dark']].map(([k, i, l]) => `<button class="chip ${getPref() === k ? 'on' : ''}" data-act="themeSet" data-id="${k}">${ic(i, 'sm')}${l}</button>`).join('')}</div></div>
     <div class="panel"><h2>Account</h2>
       <p class="hint" style="margin:0 0 10px">${useSB ? `Synced with Supabase${S.user ? ' as ' + esc(S.user.email) : ''}.` : 'Demo mode: data is stored only in this browser. Add your Supabase keys in config.js to sync across devices.'}</p>
-      ${useSB ? `<button class="btn block" data-act="signout">${ic('logout')}Sign out</button>` : ''}</div>`;
+      ${useSB ? `<button class="btn block" data-act="signout">${ic('logout')}Sign out</button>` : ''}</div></div>`;
 }
 
 /* ============================ forms ============================ */

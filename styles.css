@@ -567,3 +567,71 @@ pre.code code { display: block; min-width: max-content; font: inherit; }
 .qa-card, .qa-card > * { min-width: 0; }
 .code-wrap { max-width: 100%; }
 .opp-actions + .qa-list { margin-top: 14px; }
+
+/* =====================================================================
+   v6: modal with fixed header + desktop layout
+   ===================================================================== */
+/* ---- modal: header stays on top, only the body scrolls ---- */
+.sheet { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.sheet-top { flex: none; padding: 10px 18px 0; background: var(--surface); border-bottom: 1px solid var(--line); position: relative; z-index: 1; }
+.sheet-top .grab { margin-bottom: 8px; }
+.sheet-top .sheet-head { margin-bottom: 0; padding-bottom: 12px; }
+.sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  padding: 16px 18px calc(22px + env(safe-area-inset-bottom)); }
+@media (min-width: 700px) {
+  .sheet { max-width: 620px; max-height: 90dvh; box-shadow: 0 30px 80px rgba(8, 12, 28, .45); }
+  .sheet-top { padding: 18px 24px 0; } .sheet-top .grab { display: none; }
+  .sheet-top .sheet-head { padding-bottom: 14px; } .sheet-head h2 { font-size: 20px; }
+  .sheet-body { padding: 20px 24px 26px; }
+}
+
+/* ---- page sections that become columns on large screens ---- */
+.split { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); align-items: start; margin-bottom: 14px; }
+.split > .panel { margin: 0; min-width: 0; }
+.btn-row + .split { margin-top: 16px; }
+
+/* ---- desktop ---- */
+@media (min-width: 900px) {
+  /* sidebar brand lines up with the top bar */
+  .nav { padding-top: 0; }
+  .nav .brand { height: var(--topbar-h); margin: 0 -14px 16px; padding: 0 12px 0 26px; border-bottom: 1px solid var(--line); }
+  .nav button { padding: 11px 14px; border-radius: 12px; }
+  .topbar { padding-left: 40px; padding-right: 40px; }
+  main { max-width: 1240px; padding-left: 40px; padding-right: 40px; padding-bottom: 80px; }
+  .top { margin-bottom: 22px; }
+  h1 { font-size: 32px; }
+  .stats { gap: 16px; margin-bottom: 22px; }
+  .stat { padding: 16px 18px; }
+  .stat b { font-size: 28px; }
+  .search { max-width: 520px; }
+  .chips.scroll { margin-inline: 0; padding-inline: 0; flex-wrap: wrap; overflow: visible; }
+  .list { gap: 16px; }
+  .panel { padding: 20px; }
+  .back { margin-bottom: 14px; }
+}
+@media (min-width: 1100px) {
+  /* card grids */
+  .list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .list > .empty { grid-column: 1 / -1; }
+  .qa-list { grid-template-columns: minmax(0, 1fr); max-width: 900px; }
+  /* two-column pages */
+  .split.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  .split.fu, .split.sh { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 20px; }
+  .split.fu > .panel:nth-child(1) { grid-column: 1; grid-row: 1; }
+  .split.fu > .panel:nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
+  .split.fu > .panel:nth-child(3) { grid-column: 1; grid-row: 2; }
+  .split.sh > .panel:nth-child(1) { grid-column: 1; grid-row: 1; }
+  .split.sh > .panel:nth-child(2) { grid-column: 2; grid-row: 1 / span 4; position: sticky; top: calc(var(--topbar-h) + 20px); }
+  .split.sh > .panel:nth-child(3) { grid-column: 1; grid-row: 2; }
+  .split.sh > .panel:nth-child(4) { grid-column: 1; grid-row: 3; }
+  .split.sh > .panel:nth-child(5) { grid-column: 1; grid-row: 4; }
+  .split.fu textarea#fuBody { min-height: 300px; }
+}
+
+/* v6 fixes: consistent page width, tidy two-column rows */
+main { width: 100%; }
+@media (min-width: 1100px) {
+  .split.fu { grid-template-rows: auto 1fr; }
+  .split.sh { grid-template-rows: auto auto auto 1fr; }
+  .split.fu .btn-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
